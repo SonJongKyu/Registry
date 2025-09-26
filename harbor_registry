@@ -1,0 +1,124 @@
+# ========================================
+# 1. Docker 설치
+# ========================================
+sudo apt update
+sudo apt install -y net-tools ssh curl ca-certificates
+
+# Docker 키 저장소 생성 및 GPG 키 등록
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Docker 저장소 추가
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Docker 버전 확인 및 사용자 권한 추가
+docker version
+sudo usermod -aG docker kevin
+
+# Docker 서비스 등록 및 시작
+sudo systemctl enable docker.service
+sudo systemctl start docker.service
+sudo systemctl status docker.service
+
+# ========================================
+# 2. Docker-compose 설치
+# ========================================
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+  -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+docker-compose --version
+
+# ========================================
+# 3. OpenSSL 설치 및 인증서 생성
+# ========================================
+sudo apt install -y openssl
+mkdir -p ~/cert && cd ~/cert
+
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout ca.key \
+  -out ca.crt \
+  -subj "/C=KR/ST=Seoul/L=Seoul/O=acs7th/OU=IT/CN=192.168.2.21" \
+  -addext "subjectAltName = IP:192.168.2.21"
+
+# (생성된 ca.crt를 Windows에 복사 → 사용자 인증서 관리 → 신뢰할 수 있는 루트 인증 기관 등록)
+
+# ========================================
+# 4. Harbor 설치
+# ========================================
+wget https://github.com/goharbor/harbor/releases/download/v2.11.1/harbor-offline-installer-v2.11.1.tgz
+tar -zxvf harbor-offline-installer-v2.11.1.tgz
+cd harbor
+
+cp harbor.yml.tmpl harbor.yml
+
+# harbor.yml 편집
+# hostname: 192.168.2.21
+# https:
+#   port: 443
+#   certificate: /home/kevin/cert/ca.crt
+#   private_key: /home/kevin/cert/ca.key
+
+# Harbor 및 Trivy 설치
+sudo ./install.sh --with-trivy
+
+# Harbor 실행
+sudo docker-compose up -d
+
+# ========================================
+# 5. Trivy 설치 및 서버 실행 (필요시)
+# ========================================
+sudo snap install trivy
+sudo mkdir -p /root/trivy-cache
+sudo chmod 777 /root/trivy-cache
+sudo -i
+trivy server --listen 0.0.0.0:4950 --cache-dir /root/trivy-cache
+# (TOOMANYREQUESTS 발생 시 GitHub Personal Token 발급 후 환경변수 등록)
+
+# ========================================
+# 6. Docker 클라이언트 설정
+# ========================================
+sudo vi /etc/docker/daemon.json
+# {
+#   "insecure-registries":["192.168.2.21:443"]
+# }
+
+sudo vi /etc/hosts
+# 192.168.2.21    hostos1
+
+sudo service docker restart
+
+# ========================================
+# 7. Harbor 로그인
+# ========================================
+# 일반 사용자
+sudo docker login -u user3 192.168.2.21:443
+# password: Pass123#
+
+# admin 계정
+sudo docker login -u admin 192.168.2.21:443
+# password: Harbor12345
+
+# ========================================
+# 8. 이미지 Push
+# ========================================
+# 로컬 이미지 태그 설정
+sudo docker tag phpserver:1.0 192.168.2.21:443/project/phpserver:1.0
+
+# Harbor에 푸시
+sudo docker push 192.168.2.21:443/project/phpserver:1.0
+
+# Harbor 웹에서 이미지 확인
+docker images
+
+# ========================================
+# 9. 이미지 Pull
+# ========================================
+sudo docker pull 192.168.2.21:443/project/phpserver:1.0
+docker images
