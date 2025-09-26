@@ -75,7 +75,7 @@ DockerHub 같은 퍼블릭 레지스트리 의존도를 줄이고,
 
 ## **⚙️ Install**
 
-```bash
+```
 # ========================================
 # ▶ Option 1: Docker Registry
 # ========================================
@@ -94,11 +94,11 @@ docker login 192.168.3.14
 docker tag nginx:1.27.2 192.168.3.14/nginx:1.27.2
 docker push 192.168.3.14/nginx:1.27.2
 docker pull 192.168.3.14/nginx:1.27.2
-
+```
 # ========================================
 # ▶ Option 2: Harbor Registry
 # ========================================
-
+```
 # Harbor 설치 파일 다운로드 및 압축 해제
 wget https://github.com/goharbor/harbor/releases/download/v2.11.1/harbor-offline-installer-v2.11.1.tgz
 tar -zxvf harbor-offline-installer-v2.11.1.tgz && cd harbor
@@ -121,11 +121,11 @@ docker login -u admin 192.168.2.21:443
 docker tag phpserver:1.0 192.168.2.21:443/project/phpserver:1.0
 docker push 192.168.2.21:443/project/phpserver:1.0
 docker pull 192.168.2.21:443/project/phpserver:1.0
-
+```
 # ========================================
 # ▶ Option 3: Nexus Registry
 # ========================================
-
+```
 # Nexus 설치 (Docker Compose 기반)
 cat > docker-compose.yml <<EOF
 version: '3'
@@ -150,3 +150,4 @@ docker login 192.168.1.248:5000
 docker tag mysql:8.0.32 192.168.1.248:5000/docker-hosted/mysql:8.0.32
 docker push 192.168.1.248:5000/docker-hosted/mysql:8.0.32
 docker pull 192.168.1.248:5000/docker-hosted/mysql:8.0.32
+```
