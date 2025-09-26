@@ -75,11 +75,11 @@ DockerHub 같은 퍼블릭 레지스트리 의존도를 줄이고,
 
 ## **⚙️ Install**
 
-```
-# ========================================
-# ▶ Option 1: Docker Registry
-# ========================================
 
+ ========================================
+ ▶ Option 1: Docker Registry
+ ========================================
+```
 # 인증서 생성
 openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
   -keyout server.key -out server.crt \
@@ -96,11 +96,12 @@ docker push 192.168.3.14/nginx:1.27.2
 docker pull 192.168.3.14/nginx:1.27.2
 ```
 
-```
-# ========================================
-# ▶ Option 2: Harbor Registry
-# ========================================
 
+ ========================================
+ ▶ Option 2: Harbor Registry
+ ========================================
+
+```
 # Harbor 설치 파일 다운로드 및 압축 해제
 wget https://github.com/goharbor/harbor/releases/download/v2.11.1/harbor-offline-installer-v2.11.1.tgz
 tar -zxvf harbor-offline-installer-v2.11.1.tgz && cd harbor
@@ -125,10 +126,12 @@ docker push 192.168.2.21:443/project/phpserver:1.0
 docker pull 192.168.2.21:443/project/phpserver:1.0
 ```
 
+
+ ========================================
+ ▶ Option 3: Nexus Registry
+ ========================================
+
 ```
-# ========================================
-# ▶ Option 3: Nexus Registry
-# ========================================
 # Nexus 설치 (Docker Compose 기반)
 cat > docker-compose.yml <<EOF
 version: '3'
