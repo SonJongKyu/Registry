@@ -1,0 +1,155 @@
+# ================================
+# 1. 작업 디렉토리 생성
+# ================================
+mkdir -p ~/docker-registry && cd ~/docker-registry
+
+# ================================
+# 2. SSL 인증서 생성 (Self-signed)
+# ================================
+mkdir certs && cd certs
+
+openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
+  -keyout server.key -out server.crt \
+  -subj "/C=KR/ST=Seoul/L=Seoul/O=acs7th/OU=IT/CN=192.168.3.14" \
+  -addext "subjectAltName = IP:192.168.3.14"
+
+# 루트 디렉토리로 이동
+cd ..
+
+# ================================
+# 3. Docker Compose 파일 작성
+# ================================
+cat > docker-compose.yml << 'EOF'
+version: "3.9"
+
+services:
+  registry:
+    image: registry:latest
+    restart: always
+    networks:
+      - registry-net
+    volumes:
+      - ./data:/var/lib/registry
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_STORAGE_CACHE_BLOBDESCRIPTOR: inmemory
+
+  registry-ui:
+    image: joxit/docker-registry-ui:latest
+    restart: always
+    environment:
+      REGISTRY_TITLE: "ACS7th Private Registry"
+      REGISTRY_URL: "https://192.168.3.14"
+    networks:
+      - registry-net
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    depends_on:
+      - registry
+      - registry-ui
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs/server.crt:/etc/nginx/server.crt:ro
+      - ./certs/server.key:/etc/nginx/server.key:ro
+      - ./htpasswd:/etc/nginx/htpasswd:ro
+      - ./logs:/var/log/nginx
+    networks:
+      - registry-net
+
+networks:
+  registry-net: {}
+EOF
+
+# ================================
+# 4. 인증 정보 설정 (htpasswd)
+# ================================
+sudo apt-get update && sudo apt-get install -y apache2-utils
+
+# 사용자 kevin / 비밀번호 pass123#
+htpasswd -cb htpasswd kevin pass123#
+
+# ================================
+# 5. Nginx 설정 파일 생성
+# ================================
+cat > nginx.conf << 'EOF'
+events {}
+
+http {
+  # HTTP → HTTPS 리다이렉트
+  server {
+    listen 80;
+    server_name 192.168.3.14;
+    return 301 https://$host$request_uri;
+  }
+
+  # HTTPS 서버
+  server {
+    listen 443 ssl;
+    server_name 192.168.3.14;
+
+    ssl_certificate     /etc/nginx/server.crt;
+    ssl_certificate_key /etc/nginx/server.key;
+
+    # Docker Registry 프록시
+    location /v2/ {
+      auth_basic           "Registry";
+      auth_basic_user_file /etc/nginx/htpasswd;
+
+      proxy_pass http://registry:5000;
+      proxy_set_header Host               $http_host;
+      proxy_set_header X-Real-IP          $remote_addr;
+      proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto  $scheme;
+
+      client_max_body_size 16G;
+    }
+
+    # Registry UI 프록시
+    location / {
+      proxy_pass http://registry-ui:80;
+      proxy_set_header Host               $http_host;
+      proxy_set_header X-Real-IP          $remote_addr;
+      proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto  $scheme;
+    }
+  }
+}
+EOF
+
+# ================================
+# 6. Docker 클라이언트 인증서 신뢰 설정
+# ================================
+# (클라이언트 PC에서 실행)
+# 서버 인증서(server.crt)를 클라이언트로 복사 후 실행
+sudo mkdir -p /etc/docker/certs.d/192.168.3.14
+sudo mv ./server.crt /etc/docker/certs.d/192.168.3.14/server.crt
+sudo systemctl restart docker
+
+# ================================
+# 7. Docker Compose 서비스 실행
+# ================================
+docker compose up -d
+
+# ================================
+# 8. 레지스트리 로그인 및 이미지 Push/Pull 테스트
+# ================================
+docker login 192.168.3.14
+# 로그인 시 kevin / pass123#
+
+# 이미지 푸시
+docker tag your-image:tag 192.168.3.14/your-image:tag
+docker push 192.168.3.14/your-image:tag
+
+# 이미지 풀
+docker pull 192.168.3.14/nginx:1.27.2-alpine
+
+# ================================
+# 9. 웹 UI 접속
+# ================================
+# 브라우저에서 접속
+# https://192.168.3.14
+# (self-signed 인증서이므로 보안 예외 등록 필요)
