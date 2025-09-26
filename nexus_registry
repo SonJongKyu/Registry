@@ -1,0 +1,210 @@
+# ========================================
+# 1. Nexus 설치 (수동 설치 방식)
+# ========================================
+sudo apt update
+sudo apt install -y net-tools openssh-server openjdk-11-jdk vim
+
+cd /usr/local/src
+sudo wget https://download.sonatype.com/nexus/3/nexus-3.73.0-12-unix.tar.gz
+sudo tar -zxvf nexus-3.73.0-12-unix.tar.gz
+sudo mv nexus-3.73.0-12 nexus1
+
+# nexus 사용자 생성 및 권한 설정
+sudo useradd nexus
+sudo chown -R nexus:nexus /usr/local/src/nexus1
+sudo chown -R nexus:nexus /usr/local/src/sonatype-work/
+
+# 실행 파일 심볼릭 링크
+sudo ln -s /usr/local/src/nexus1/bin/nexus /etc/init.d/nexus
+
+# nexus.rc 수정
+sudo sed -i 's/#run_as_user=""/run_as_user="nexus"/' /usr/local/src/nexus1/bin/nexus.rc
+
+# systemd 서비스 등록
+sudo tee /etc/systemd/system/nexus.service > /dev/null <<EOL
+[Unit]
+Description=Nexus Repository Manager
+After=network.target
+
+[Service]
+Type=forking
+LimitNOFILE=65536
+ExecStart=/usr/local/src/nexus1/bin/nexus start
+ExecStop=/usr/local/src/nexus1/bin/nexus stop
+User=nexus
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+sudo systemctl daemon-reload
+sudo systemctl enable nexus
+sudo systemctl start nexus
+# 접속 확인: http://<서버IP>:8081
+
+# 초기 비밀번호 확인
+cat /usr/local/src/sonatype-work/admin.password
+
+# Docker 데몬 insecure-registry 설정
+sudo tee /etc/docker/daemon.json > /dev/null <<EOL
+{
+  "insecure-registries" : ["192.168.1.248:5000"]
+}
+EOL
+sudo systemctl restart docker
+
+# ========================================
+# 2. Docker Registry 연동 테스트
+# ========================================
+docker login 192.168.1.248:5000
+# Username: admin
+# Password: (admin.password에서 확인)
+
+# 이미지 태깅 및 푸시
+docker tag mysql:8.0.32 192.168.1.248:5000/docker-hosted/mysql:8.0.32
+docker push 192.168.1.248:5000/docker-hosted/mysql:8.0.32
+
+# 풀 테스트
+docker pull 192.168.1.248:5000/docker-hosted/mysql:8.0.32
+
+# 컨테이너 실행
+docker run -d --name mysql1 -e MYSQL_ROOT_PASSWORD=yourpassword \
+  192.168.1.248:5000/docker-hosted/mysql:8.0.32
+
+# ========================================
+# 3. Nginx Reverse Proxy 설정
+# ========================================
+sudo apt install -y nginx
+sudo systemctl enable nginx && sudo systemctl start nginx
+
+# SSL 인증서 생성 (Self-signed)
+sudo mkdir -p /etc/nginx/ssl/
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/nginx/ssl/nginx-selfsigned.key \
+  -out /etc/nginx/ssl/nginx-selfsigned.crt
+sudo openssl dhparam -out /etc/nginx/ssl/dhparam.pem 2048
+
+# Nginx 설정 수정
+sudo tee /etc/nginx/sites-available/default > /dev/null <<EOL
+server {
+    listen 443 ssl;
+    server_name <your-ip>;
+
+    ssl_certificate /etc/nginx/ssl/nginx-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/ssl/nginx-selfsigned.key;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+
+    location / {
+        proxy_pass http://localhost:8081;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+
+server {
+    listen 80;
+    server_name <your-ip>;
+    return 301 https://\$host\$request_uri;
+}
+EOL
+
+sudo nginx -t
+sudo systemctl restart nginx
+# 접속 확인: https://<your-ip>/
+
+# ========================================
+# 4. Docker Compose 기반 Nexus 설치
+# ========================================
+sudo apt install -y python3-pip
+sudo pip3 install docker-compose || sudo apt install -y docker-compose
+
+mkdir -p ~/project/nexus-docker && cd ~/project/nexus-docker
+
+cat > docker-compose.yml << 'EOF'
+version: '3'
+services:
+  nexus:
+    image: sonatype/nexus3
+    container_name: nexus
+    volumes:
+      - ./nexus-data:/nexus-data
+    networks:
+      - nexus-network
+    ports:
+      - "8081:8081"
+    restart: always
+
+  nginx:
+    image: nginx
+    container_name: nginx
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+    ports:
+      - "443:443"
+    depends_on:
+      - nexus
+    networks:
+      - nexus-network
+    restart: always
+
+networks:
+  nexus-network:
+    driver: bridge
+EOF
+
+mkdir -p nexus-data nginx/conf.d nginx/ssl
+
+# SSL 인증서 생성
+cd nginx/ssl
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout nexus.key \
+  -out nexus.crt \
+  -subj "/C=KR/ST=Seoul/L=Seoul/O=Your Company/OU=Your Unit/CN=yourip"
+
+# Nginx 프록시 설정
+cat > ../conf.d/default.conf << 'EOF'
+server {
+    listen 443 ssl;
+    server_name 192.168.219.162;
+
+    ssl_certificate /etc/nginx/ssl/nexus.crt;
+    ssl_certificate_key /etc/nginx/ssl/nexus.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://nexus:8081/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+EOF
+
+# 권한 수정 및 실행
+cd ~/project/nexus-docker
+sudo chown -R 200:200 ./nexus-data
+docker compose up -d
+
+# 초기 비밀번호 확인
+docker exec -it nexus cat /nexus-data/admin.password
+
+# ========================================
+# 5. 예시 - 커스텀 이미지 빌드 및 푸시
+# ========================================
+cat > Dockerfile << 'EOF'
+FROM nginx:1.27.2
+COPY RAPA7.jpg /usr/share/nginx/html/RAPA7.jpg
+COPY RAPA_Study.jpg /usr/share/nginx/html/RAPA_Study.jpg
+COPY index.nginx-debian.html /usr/share/nginx/html/index.html
+EXPOSE 80/tcp
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+
+docker build -t myserver:1.0 .
+docker tag myserver:1.0 192.168.1.248:5000/docker-hosted/myserver:1.0
+docker push 192.168.1.248:5000/docker-hosted/myserver:1.0
